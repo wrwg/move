@@ -198,6 +198,7 @@ impl Generator {
             .get_funs()
             .map(|f| ctx.env.get_function(f).get_loc().file_id())
             .collect();
+        let mut use_src_emitted = false;
         for file_id in ctx.env.get_source_file_ids() {
             if used_files.contains(&file_id) {
                 let mut file_path = ctx.env.get_file(file_id).to_string_lossy().to_string();
@@ -209,14 +210,21 @@ impl Generator {
                 if file_path.starts_with(&current_dir) {
                     file_path = file_path[current_dir.len()..].to_string();
                 }
-                emitln!(
+                if !use_src_emitted {
+                    emitln!(ctx.writer, "/// @use-src");
+                    use_src_emitted = true;
+                } else {
+                    emitln!(ctx.writer, ",")
+                }
+                emit!(
                     ctx.writer,
-                    "/// @use-src {}:\"{}\"\n",
+                    "///   {}:\"{}\"",
                     ctx.env.file_id_to_idx(file_id),
                     file_path
                 );
             }
         }
+        emitln!(ctx.writer);
         emitln!(ctx.writer);
     }
 

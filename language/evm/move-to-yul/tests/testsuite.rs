@@ -1,9 +1,11 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use anyhow::Context;
 use codespan_reporting::{diagnostic::Severity, term::termcolor::Buffer};
 use evm::backend::MemoryVicinity;
 use evm_exec_utils::{compile, exec::Executor};
+use evm_runtime::tracing;
 use move_command_line_common::testing::EXP_EXT;
 use move_compiler::shared::NumericalAddress;
 use move_model::{
@@ -67,10 +69,8 @@ fn path_from_crate_root(path: &str) -> String {
 }
 
 fn compile_check(_options: &Options, source: &str) -> String {
-    match compile::solc_yul(source, true) {
-        Ok((_, optimized_source)) => {
-            format!("!! Optimized Yul\n\n{}", optimized_source.expect("source"))
-        }
+    match compile::solc_yul(source, false) {
+        Ok(_) => "!! Succeeded compiling Yul\n\n{}".to_string(),
         Err(msg) => format!("!! Errors compiling Yul\n\n{}", msg),
     }
 }
@@ -94,7 +94,8 @@ fn run_tests(
 
 fn execute_test(_env: &GlobalEnv, source: &str) -> anyhow::Result<String> {
     // Compile source
-    let (code, _) = compile::solc_yul(source, false)?;
+    let (code, _) =
+        compile::solc_yul(source, false).with_context(|| format!("Yul source:\n {}", source))?;
 
     // Create executor.
     let vicinity = MemoryVicinity {
@@ -110,8 +111,46 @@ fn execute_test(_env: &GlobalEnv, source: &str) -> anyhow::Result<String> {
         block_base_fee_per_gas: 0.into(),
     };
     let mut exec = Executor::new(&vicinity);
-    let res = exec.execute_custom_code(H160::zero(), H160::zero(), code, vec![]);
-    Ok(res.to_string())
+    if std::env::var("EVM_STEP_LISTENER").is_ok() {
+        let mut listener = StepListener();
+        tracing::using(&mut listener, || {
+            let res = exec.execute_custom_code(H160::zero(), H160::zero(), code, vec![]);
+            Ok(res.to_string())
+        })
+    } else {
+        let res = exec.execute_custom_code(H160::zero(), H160::zero(), code, vec![]);
+        Ok(res.to_string())
+    }
+}
+
+struct StepListener();
+
+impl tracing::EventListener for StepListener {
+    fn event(&mut self, event: tracing::Event) {
+        use tracing::Event::*;
+        match event {
+            Step { opcode, stack, .. } => {
+                println!("opcode {}", opcode.as_usize());
+                println!("stack:");
+                for i in (0..stack.len()).rev() {
+                    println!("  {}", stack.data()[i])
+                }
+            }
+            StepResult {
+                result,
+                return_value,
+                ..
+            } => {
+                println!("==> {:?} (ret={:?})", result, return_value)
+            }
+            SLoad { index, value, .. } => {
+                println!("{} := sload {}", value, index)
+            }
+            SStore { index, value, .. } => {
+                println!("sstore({}, {})", index, value)
+            }
+        }
+    }
 }
 
 datatest_stable::harness!(test_runner, "tests", r".*\.move$");

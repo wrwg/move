@@ -7,6 +7,11 @@ module Evm::Evm {
     use Std::Errors;
     use Evm::U256::{U256};
 
+    /// Move data to storage of the executing contract.
+    public fun to_storage<T: key>(data: T) {
+        move_to<T>(sign(self()), data)
+    }
+
     /// Returns the address of the executing contract.
     public native fun self(): address;
 
